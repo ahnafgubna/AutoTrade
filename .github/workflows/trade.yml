@@ -1,0 +1,35 @@
+name: AutoTrader
+
+on:
+  schedule:
+    # Every 5 minutes, Monday-Friday, 9:30am-4:00pm ET (13:30-20:00 UTC)
+    - cron: "*/5 13 * * 1-5"
+    - cron: "*/5 14 * * 1-5"
+    - cron: "*/5 15 * * 1-5"
+    - cron: "*/5 16 * * 1-5"
+    - cron: "*/5 17 * * 1-5"
+    - cron: "*/5 18 * * 1-5"
+    - cron: "*/5 19 * * 1-5"
+  workflow_dispatch:  # allows manual trigger from GitHub UI for testing
+
+jobs:
+  trade:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run trading bot
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_API_SECRET: ${{ secrets.ALPACA_API_SECRET }}
+        run: python main.py
