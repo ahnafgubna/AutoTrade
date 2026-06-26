@@ -5,6 +5,7 @@ each run rather than stored in memory.
 """
 import os
 import sys
+from datetime import datetime, timezone, timedelta
 from broker import get_account, get_bars, get_position, place_order, close_position
 from strategy import should_enter, should_exit, LOOKBACK
 
@@ -12,8 +13,19 @@ SYMBOL = "TQQQ"
 POSITION_PCT = 0.80
 DAILY_LOSS_LIMIT_PCT = 0.03
 
+# Market hours: 9:30am - 4:00pm ET (ET = UTC-4 in summer, UTC-5 in winter)
+ET = timezone(timedelta(hours=-4))
+MARKET_OPEN = 9 * 60 + 30   # 9:30am in minutes
+MARKET_CLOSE = 16 * 60       # 4:00pm in minutes
+
 
 def run():
+    now_et = datetime.now(ET)
+    minutes = now_et.hour * 60 + now_et.minute
+    if not (MARKET_OPEN <= minutes < MARKET_CLOSE):
+        print(f"Outside market hours ({now_et.strftime('%I:%M %p')} ET). Exiting.")
+        sys.exit(0)
+
     account = get_account()
     cash = float(account["buying_power"])
     equity = float(account["equity"])
