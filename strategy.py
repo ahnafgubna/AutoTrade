@@ -1,8 +1,10 @@
 LOOKBACK = 20
-Z_SCORE_ENTRY = -1.5
-TAKE_PROFIT_PCT = 0.005   # 0.5%
-STOP_LOSS_PCT = 0.008     # 0.8%
-STOP_CANDLES = 2          # price must stay below stop for 2 candles before exiting
+STOP_CANDLES = 2
+
+# Default params (used if no per-symbol override passed)
+Z_SCORE_ENTRY   = -1.5
+TAKE_PROFIT_PCT = 0.005
+STOP_LOSS_PCT   = 0.008
 
 
 def z_score(prices):
@@ -17,18 +19,15 @@ def z_score(prices):
     return (prices[-1] - mean) / std
 
 
-def should_enter(prices):
-    """Return True if z-score signals a mean reversion buy."""
+def should_enter(prices, z_entry=Z_SCORE_ENTRY):
     z = z_score(prices)
-    return z is not None and z <= Z_SCORE_ENTRY
+    return z is not None and z <= z_entry
 
 
-def should_exit(current_price, buy_price, candles_below_stop):
-    """
-    Returns ('take_profit' | 'stop_loss' | 'hold'), updated candles_below_stop count.
-    """
-    target = buy_price * (1 + TAKE_PROFIT_PCT)
-    stop = buy_price * (1 - STOP_LOSS_PCT)
+def should_exit(current_price, buy_price, candles_below_stop,
+                take_profit=TAKE_PROFIT_PCT, stop_loss=STOP_LOSS_PCT):
+    target = buy_price * (1 + take_profit)
+    stop   = buy_price * (1 - stop_loss)
 
     if current_price >= target:
         return "take_profit", 0
@@ -38,5 +37,5 @@ def should_exit(current_price, buy_price, candles_below_stop):
         if candles_below_stop >= STOP_CANDLES:
             return "stop_loss", 0
         return "hold", candles_below_stop
-    else:
-        return "hold", 0  # recovered above stop, reset counter
+
+    return "hold", 0

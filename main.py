@@ -1,7 +1,7 @@
 """
-Single-execution trading script — designed to be called every 5 minutes
-by GitHub Actions. State (position, entry price) is read from Alpaca API
-each run rather than stored in memory.
+Single-execution trading script — called every 5 minutes by GitHub Actions.
+Loops through all symbols in SYMBOL_CONFIG, checks signals, manages positions.
+State is read from Alpaca each run (stateless design).
 """
 import os
 import sys
@@ -9,14 +9,24 @@ from datetime import datetime, timezone, timedelta
 from broker import get_account, get_bars, get_position, place_order, close_position
 from strategy import should_enter, should_exit, LOOKBACK
 
-SYMBOL = "TQQQ"
-POSITION_PCT = 0.80
+# ── Per-symbol strategy configs ──────────────────────────────────────────────
+# z_entry: how far below mean to trigger buy (more negative = pickier)
+# take_profit: % gain to close for profit
+# stop_loss: % drop to close for loss
+SYMBOL_CONFIG = {
+    "TQQQ": {"z_entry": -1.5, "take_profit": 0.005, "stop_loss": 0.008},
+    "SPY":  {"z_entry": -1.5, "take_profit": 0.004, "stop_loss": 0.006},
+    "QQQ":  {"z_entry": -1.5, "take_profit": 0.004, "stop_loss": 0.007},
+    "NVDA": {"z_entry": -1.5, "take_profit": 0.005, "stop_loss": 0.008},
+}
+
+POSITION_PCT       = 0.80   # fraction of per-symbol allocation to deploy
+CAPITAL_PER_SYMBOL = 400    # simulate $400 per symbol (matches backtest)
 DAILY_LOSS_LIMIT_PCT = 0.03
 
-# Market hours: 9:30am - 4:00pm ET (ET = UTC-4 in summer, UTC-5 in winter)
 ET = timezone(timedelta(hours=-4))
-MARKET_OPEN = 9 * 60 + 30   # 9:30am in minutes
-MARKET_CLOSE = 16 * 60       # 4:00pm in minutes
+MARKET_OPEN  = 9 * 60 + 30
+MARKET_CLOSE = 16 * 60
 
 
 def run():
@@ -27,58 +37,61 @@ def run():
         sys.exit(0)
 
     account = get_account()
-    cash = float(account["buying_power"])
-    equity = float(account["equity"])
+    equity      = float(account["equity"])
     last_equity = float(account.get("last_equity", equity))
-    day_pnl = equity - last_equity
+    day_pnl     = equity - last_equity
 
-    print(f"Account | Equity: ${equity:.2f} | Day P&L: ${day_pnl:+.2f} | Cash: ${cash:.2f}")
+    print(f"Account | Equity: ${equity:.2f} | Day P&L: ${day_pnl:+.2f}")
 
-    # Daily loss limit check
     if day_pnl <= -(last_equity * DAILY_LOSS_LIMIT_PCT):
-        print(f"Daily loss limit hit (${day_pnl:.2f}). No trades today.")
+        print(f"Daily loss limit hit (${day_pnl:.2f}). No new trades today.")
         sys.exit(0)
 
-    # Get price data
-    prices = get_bars(SYMBOL, limit=LOOKBACK + 5)
-    if len(prices) < LOOKBACK + 1:
-        print("Not enough price data yet. Exiting.")
-        sys.exit(0)
+    for symbol, cfg in SYMBOL_CONFIG.items():
+        print(f"\n── {symbol} ──")
+        prices = get_bars(symbol, limit=LOOKBACK + 5)
+        if len(prices) < LOOKBACK + 1:
+            print(f"  Not enough data, skipping.")
+            continue
 
-    price = prices[-1]
-    position = get_position(SYMBOL)
+        price    = prices[-1]
+        position = get_position(symbol)
 
-    if position:
-        qty = int(float(position["qty"]))
-        buy_price = float(position["avg_entry_price"])
-        candles_below_stop = 0  # stateless — rely on stop/target check only
+        if position:
+            qty       = int(float(position["qty"]))
+            buy_price = float(position["avg_entry_price"])
 
-        action, _ = should_exit(price, buy_price, candles_below_stop)
+            action, _ = should_exit(
+                price, buy_price, 0,
+                take_profit=cfg["take_profit"],
+                stop_loss=cfg["stop_loss"]
+            )
 
-        if action == "take_profit":
-            close_position(SYMBOL)
-            pnl = (price - buy_price) * qty
-            print(f"TAKE PROFIT | Sold {qty} {SYMBOL} @ ${price:.2f} | P&L: ${pnl:+.2f}")
+            if action == "take_profit":
+                close_position(symbol)
+                pnl = (price - buy_price) * qty
+                print(f"  TAKE PROFIT | Sold {qty} @ ${price:.2f} | P&L: ${pnl:+.2f}")
 
-        elif action == "stop_loss":
-            close_position(SYMBOL)
-            pnl = (price - buy_price) * qty
-            print(f"STOP LOSS | Sold {qty} {SYMBOL} @ ${price:.2f} | P&L: ${pnl:+.2f}")
+            elif action == "stop_loss":
+                close_position(symbol)
+                pnl = (price - buy_price) * qty
+                print(f"  STOP LOSS   | Sold {qty} @ ${price:.2f} | P&L: ${pnl:+.2f}")
 
-        else:
-            unrealized = (price - buy_price) * qty
-            print(f"Holding {qty} {SYMBOL} | Entry: ${buy_price:.2f} | Now: ${price:.2f} | Unrealized: ${unrealized:+.2f}")
-
-    else:
-        if should_enter(prices):
-            qty = int((cash * POSITION_PCT) / price)
-            if qty >= 1:
-                place_order(SYMBOL, qty, "buy")
-                print(f"BUY | {qty} {SYMBOL} @ ${price:.2f} | Total: ${qty * price:.2f}")
             else:
-                print(f"Signal triggered but insufficient cash (${cash:.2f})")
+                unrealized = (price - buy_price) * qty
+                print(f"  Holding {qty} | Entry: ${buy_price:.2f} | Now: ${price:.2f} | Unrealized: ${unrealized:+.2f}")
+
         else:
-            print(f"No entry signal | {SYMBOL} @ ${price:.2f}")
+            if should_enter(prices, z_entry=cfg["z_entry"]):
+                cash_to_use = CAPITAL_PER_SYMBOL * POSITION_PCT
+                qty = int(cash_to_use / price)
+                if qty >= 1:
+                    place_order(symbol, qty, "buy")
+                    print(f"  BUY {qty} @ ${price:.2f} | Total: ${qty * price:.2f}")
+                else:
+                    print(f"  Signal triggered but price too high for allocation (${price:.2f})")
+            else:
+                print(f"  No entry signal @ ${price:.2f}")
 
 
 if __name__ == "__main__":
