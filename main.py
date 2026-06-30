@@ -10,10 +10,10 @@ from broker import get_account, get_bars, get_position, place_order, close_posit
 from strategy import should_enter, LOOKBACK
 
 SYMBOL_CONFIG = {
-    "TQQQ": {"z_entry": -1.5, "take_profit": 0.005, "stop_loss": 0.008},
-    "SPY":  {"z_entry": -1.5, "take_profit": 0.004, "stop_loss": 0.006},
-    "QQQ":  {"z_entry": -1.5, "take_profit": 0.004, "stop_loss": 0.007},
-    "NVDA": {"z_entry": -1.5, "take_profit": 0.005, "stop_loss": 0.008},
+    "TQQQ": {"z_entry": -1.5, "take_profit": 0.005, "stop_loss": 0.008},  # backtested
+    "SPY":  {"z_entry": -1.5, "take_profit": 0.004, "stop_loss": 0.006},  # backtested
+    "TLT":  {"z_entry": -1.2, "take_profit": 0.003, "stop_loss": 0.005},  # low vol — needs backtest
+    "GLD":  {"z_entry": -1.2, "take_profit": 0.003, "stop_loss": 0.005},  # low vol — needs backtest
 }
 
 POSITION_PCT         = 0.80
