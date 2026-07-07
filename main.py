@@ -62,12 +62,17 @@ def run():
             target_price = buy_price * (1 + cfg["take_profit"])
             stop_price   = buy_price * (1 - cfg["stop_loss"])
 
+            # Require the last 2 one-minute bars to both close below the stop
+            # before exiting (matches backtested STOP_CANDLES=2 logic). A single
+            # noisy tick should not be enough to trigger a stop-out.
+            last_two_below_stop = len(prices) >= 2 and prices[-1] < stop_price and prices[-2] < stop_price
+
             if price >= target_price:
                 close_position(symbol)
                 pnl = (price - buy_price) * qty
                 print(f"  TAKE PROFIT | Sold {qty} @ ${price:.2f} | P&L: ${pnl:+.2f}")
 
-            elif price < stop_price:
+            elif last_two_below_stop:
                 close_position(symbol)
                 pnl = (price - buy_price) * qty
                 print(f"  STOP LOSS   | Sold {qty} @ ${price:.2f} | P&L: ${pnl:+.2f}")
