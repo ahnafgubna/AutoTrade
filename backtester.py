@@ -1,40 +1,42 @@
+import os
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 
 HEADERS = {
-    "APCA-API-KEY-ID": "PKUTW6RGEVNSQNAZGKVWBEWPB7",
-    "APCA-API-SECRET-KEY": "GxRyVF5Szs8MifJGnVecShpkWwgm6gqjahvoXtY4MMuM",
+    "APCA-API-KEY-ID": os.environ["ALPACA_API_KEY"],
+    "APCA-API-SECRET-KEY": os.environ["ALPACA_API_SECRET"],
 }
 
-STARTING_CASH = 400
-LOOKBACK = 20
-Z_SCORE_ENTRY = -1.5    # sweet spot — not too frequent, not too selective
-STOP_CANDLES = 2
+STARTING_CASH    = 400
+LOOKBACK         = 20
+Z_SCORE_ENTRY    = -1.5
+STOP_CANDLES     = 2
 DAILY_LOSS_LIMIT = 0.03
 
 SYMBOL_CONFIG = {
     "TQQQ": {"stop": 0.008, "target": 0.005, "strategy": "scalp"},
+    "SPY":  {"stop": 0.006, "target": 0.004, "strategy": "scalp"},
+    "GLD":  {"stop": 0.005, "target": 0.003, "strategy": "scalp"},
+    "TLT":  {"stop": 0.005, "target": 0.003, "strategy": "scalp"},
 }
 
-TIMEFRAME = "1Min"  # switched from 5Min
+TIMEFRAME = "1Min"
+ET = timezone(timedelta(hours=-4))
 
 
-def get_historical_bars(symbol, days=30):
-    end = datetime.now()
+def get_historical_bars(symbol, days=365):
+    end   = datetime.now()
     start = end - timedelta(days=days)
-    url = "https://data.alpaca.markets/v2/stocks/bars"
-    all_bars = []
-    next_token = None
+    url   = "https://data.alpaca.markets/v2/stocks/bars"
+    all_bars, next_token = [], None
 
     while True:
         params = {
-            "symbols": symbol,
-            "timeframe": TIMEFRAME,
+            "symbols": symbol, "timeframe": TIMEFRAME,
             "start": start.strftime("%Y-%m-%d"),
-            "end": end.strftime("%Y-%m-%d"),
-            "feed": "iex",
-            "limit": 10000,
+            "end":   end.strftime("%Y-%m-%d"),
+            "feed": "iex", "limit": 10000,
         }
         if next_token:
             params["page_token"] = next_token
@@ -45,168 +47,244 @@ def get_historical_bars(symbol, days=30):
         next_token = data.get("next_page_token")
         if not next_token:
             break
-        print(f"  Fetching page... ({len(all_bars)} bars so far)", end="\r")
+        print(f"  Fetching... ({len(all_bars)} bars)", end="\r")
 
-    print(f"  Fetched {len(all_bars)} bars total.          ")
+    print(f"  {len(all_bars)} bars fetched.          ")
     return all_bars
 
 
 def z_score(prices, lookback):
-    if len(prices) < lookback + 1:
-        return None
     window = prices[-lookback:]
-    mean = sum(window) / lookback
-    variance = sum((p - mean) ** 2 for p in window) / lookback
-    std = variance ** 0.5
-    if std == 0:
-        return 0
+    mean   = sum(window) / lookback
+    var    = sum((p - mean) ** 2 for p in window) / lookback
+    std    = var ** 0.5
+    if std == 0: return 0
     return (prices[-1] - mean) / std
 
 
-def backtest(symbol, days=30):
-    cfg = SYMBOL_CONFIG[symbol]
+def sma(prices, period):
+    return sum(prices[-period:]) / period
+
+
+def max_drawdown(equity_curve):
+    peak, max_dd = equity_curve[0], 0
+    for v in equity_curve:
+        if v > peak: peak = v
+        dd = (peak - v) / peak
+        if dd > max_dd: max_dd = dd
+    return max_dd
+
+
+# ── Original Z-Score Scalper ──────────────────────────────────────────────────
+
+def backtest(symbol, days=365):
+    if symbol not in SYMBOL_CONFIG:
+        print(f"{symbol}: not in SYMBOL_CONFIG"); return
+    cfg      = SYMBOL_CONFIG[symbol]
     stop_pct = cfg["stop"]
-    target_pct = cfg["target"]
-    strategy = cfg["strategy"]
+    tgt_pct  = cfg["target"]
 
-    bars = get_historical_bars(symbol, days=days)
+    bars = get_historical_bars(symbol, days)
     if not bars:
-        print(f"{symbol}: No data available")
-        return
+        print(f"{symbol}: No data"); return
 
-    closes = [b["c"] for b in bars]
+    closes     = [b["c"] for b in bars]
     timestamps = [b["t"][:10] for b in bars]
-    hours = [int(b["t"][11:13]) for b in bars]
 
-    allocated_cash = STARTING_CASH
-    cash = allocated_cash
+    cash = STARTING_CASH
     holding = False
-    buy_price = 0
-    qty = 0
-    candles_below_stop = 0
-    trades = []
-    wins = 0
-    stop_exits = 0
-    target_exits = 0
-    reversion_exits = 0
-    daily_pnl = defaultdict(float)
-    daily_loss_limit = STARTING_CASH * DAILY_LOSS_LIMIT
+    buy_price = qty = candles_below_stop = 0
+    trades, wins = [], 0
+    stop_exits = target_exits = 0
+    daily_pnl  = defaultdict(float)
     halted_days = set()
+    equity_curve = [STARTING_CASH]
 
     for i in range(LOOKBACK + 1, len(closes)):
-        window = closes[:i]
         price = closes[i]
-        date = timestamps[i]
-        hour = hours[i]
-        z = z_score(window, LOOKBACK)
+        date  = timestamps[i]
 
-        if z is None:
-            continue
-
-        # Stop entering new trades if daily loss limit hit
-        if daily_pnl[date] <= -daily_loss_limit:
+        if daily_pnl[date] <= -(STARTING_CASH * DAILY_LOSS_LIMIT):
             halted_days.add(date)
-            if not holding:
-                continue
-
-
+            if not holding: continue
 
         if holding:
             stop_price = buy_price * (1 - stop_pct)
-            target_price = buy_price * (1 + target_pct)
+            tgt_price  = buy_price * (1 + tgt_pct)
 
-            if price >= target_price:
-                holding = False
+            if price >= tgt_price:
                 cash += price * qty
                 pnl = (price - buy_price) * qty
-                trades.append(pnl)
-                daily_pnl[date] += pnl
-                wins += 1
-                target_exits += 1
-                candles_below_stop = 0
+                trades.append(pnl); daily_pnl[date] += pnl
+                wins += 1; target_exits += 1
+                holding = False; candles_below_stop = 0
+                equity_curve.append(cash)
                 continue
 
             if price < stop_price:
                 candles_below_stop += 1
                 if candles_below_stop >= STOP_CANDLES:
-                    holding = False
                     cash += price * qty
                     pnl = (price - buy_price) * qty
-                    trades.append(pnl)
-                    daily_pnl[date] += pnl
-                    if pnl > 0:
-                        wins += 1
+                    trades.append(pnl); daily_pnl[date] += pnl
+                    if pnl > 0: wins += 1
                     stop_exits += 1
-                    candles_below_stop = 0
+                    holding = False; candles_below_stop = 0
+                    equity_curve.append(cash)
                 continue
             else:
                 candles_below_stop = 0
 
-            if strategy == "reversion" and z >= 0:
-                holding = False
-                cash += price * qty
-                pnl = (price - buy_price) * qty
-                trades.append(pnl)
-                daily_pnl[date] += pnl
-                if pnl > 0:
-                    wins += 1
-                reversion_exits += 1
-                continue
-
-        if not holding and z <= Z_SCORE_ENTRY and cash >= price:
-            qty = int((cash * 0.8) / price)
-            if qty < 1:
-                continue
-            holding = True
-            buy_price = price
-            candles_below_stop = 0
-            cash -= price * qty
+        if not holding:
+            if len(closes[:i]) >= LOOKBACK + 1:
+                z = z_score(closes[:i], LOOKBACK)
+                if z <= Z_SCORE_ENTRY:
+                    qty = round((cash * 0.8) / price, 6)
+                    if qty >= 0.001:
+                        holding = True; buy_price = price
+                        candles_below_stop = 0; cash -= price * qty
 
     if holding:
-        cash += closes[-1] * qty
         pnl = (closes[-1] - buy_price) * qty
+        cash += closes[-1] * qty
         trades.append(pnl)
-        daily_pnl[timestamps[-1]] += pnl
-        if pnl > 0:
-            wins += 1
+        if pnl > 0: wins += 1
+        equity_curve.append(cash)
 
-    total_return = cash - allocated_cash
-    win_rate = (wins / len(trades) * 100) if trades else 0
-    avg_trade = sum(trades) / len(trades) if trades else 0
-    max_loss = min(trades) if trades else 0
-
-    # Daily stats
-    daily_returns = list(daily_pnl.values())
-    trading_days = len(daily_returns)
-    profitable_days = sum(1 for d in daily_returns if d > 0)
-    avg_daily = sum(daily_returns) / trading_days if trading_days else 0
-    best_day = max(daily_returns) if daily_returns else 0
-    worst_day = min(daily_returns) if daily_returns else 0
-    avg_daily_pct = (avg_daily / STARTING_CASH) * 100
-
-    print(f"\n{'='*50}")
-    print(f"  {symbol}  |  {strategy}  |  stop: {stop_pct*100}%  target: {target_pct*100}%")
-    print(f"{'='*50}")
-    print(f"  --- Overall ---")
-    print(f"  Trades:           {len(trades)}")
-    print(f"  Win rate:         {win_rate:.1f}%")
-    print(f"  Avg trade P&L:    ${avg_trade:+.2f}")
-    print(f"  Worst trade:      ${max_loss:.2f}")
-    print(f"  Target hits:      {target_exits}")
-    print(f"  Stop exits:       {stop_exits}")
-    print(f"  Total return:     ${total_return:+.2f}")
-    print(f"  Final cash:       ${cash:.2f}")
-    print(f"  --- Daily Breakdown ---")
-    print(f"  Trading days:     {trading_days}")
-    print(f"  Profitable days:  {profitable_days} / {trading_days}")
-    print(f"  Avg daily P&L:    ${avg_daily:+.2f}  ({avg_daily_pct:+.2f}% of capital)")
-    print(f"  Best day:         ${best_day:+.2f}")
-    print(f"  Worst day:        ${worst_day:+.2f}")
-    print(f"  Halted days:      {len(halted_days)}  (daily loss limit triggered)")
-    return total_return
+    _print_results("Z-SCORE SCALPER", symbol, trades, wins, cash,
+                   equity_curve, hold_times=None,
+                   extra=f"  Target exits:  {target_exits}\n  Stop exits:    {stop_exits}\n  Halted days:   {len(halted_days)}")
 
 
-print("Running backtest — TQQQ scalp (365 days, 1-min bars, $400 capital)\n")
-for symbol in SYMBOL_CONFIG:
-    backtest(symbol, days=365)
-print("\nDone.")
+# ── Trend Rider (Trailing Stop) ───────────────────────────────────────────────
+
+def backtest_trend_rider(symbol, days=365):
+    SMA_FAST      = 20
+    SMA_SLOW      = 50
+    TRAIL_STOP    = 0.08   # 8% below peak
+    CLOSE_MINUTES = 19 * 60 + 55  # 3:55 PM ET in minutes-since-midnight UTC
+
+    bars = get_historical_bars(symbol, days)
+    if not bars:
+        print(f"{symbol}: No data"); return
+
+    closes     = [b["c"] for b in bars]
+    timestamps = [b["t"][:10] for b in bars]
+
+    # parse bar time as ET minutes since midnight
+    def et_minutes(bar):
+        dt = datetime.fromisoformat(bar["t"].replace("Z", "+00:00")).astimezone(ET)
+        return dt.hour * 60 + dt.minute
+
+    et_mins = [et_minutes(b) for b in bars]
+
+    cash = STARTING_CASH
+    holding = False
+    buy_price = peak_price = qty = entry_idx = 0
+    trades, wins, hold_times = [], 0, []
+    daily_pnl   = defaultdict(float)
+    halted_days = set()
+    equity_curve = [STARTING_CASH]
+
+    for i in range(SMA_SLOW + 1, len(closes)):
+        price = closes[i]
+        date  = timestamps[i]
+        mins  = et_mins[i]
+
+        if daily_pnl[date] <= -(STARTING_CASH * DAILY_LOSS_LIMIT):
+            halted_days.add(date)
+            if not holding: continue
+
+        if holding:
+            if price > peak_price:
+                peak_price = price
+
+            # exit conditions
+            trail_hit  = price <= peak_price * (1 - TRAIL_STOP)
+            eod_exit   = mins >= (15 * 60 + 55)  # 3:55 PM ET
+
+            if trail_hit or eod_exit:
+                cash += price * qty
+                pnl = (price - buy_price) * qty
+                trades.append(pnl); daily_pnl[date] += pnl
+                hold_times.append(i - entry_idx)
+                if pnl > 0: wins += 1
+                holding = False
+                equity_curve.append(cash)
+                continue
+
+        if not holding:
+            if i < SMA_SLOW + 1: continue
+            fast = sma(closes[:i], SMA_FAST)
+            slow = sma(closes[:i], SMA_SLOW)
+            slow_prev = sma(closes[:i-1], SMA_SLOW)
+
+            trend_up   = slow > slow_prev * 1.0001
+            above_fast = price > fast
+
+            if trend_up and above_fast:
+                qty = round((cash * 0.8) / price, 6)
+                if qty >= 0.001:
+                    holding = True
+                    buy_price = peak_price = price
+                    entry_idx = i
+                    cash -= price * qty
+
+    if holding:
+        pnl = (closes[-1] - buy_price) * qty
+        cash += closes[-1] * qty
+        trades.append(pnl); hold_times.append(len(closes) - entry_idx)
+        if pnl > 0: wins += 1
+        equity_curve.append(cash)
+
+    _print_results("TREND RIDER", symbol, trades, wins, cash,
+                   equity_curve, hold_times=hold_times,
+                   extra=f"  Halted days:   {len(halted_days)}")
+
+
+# ── Shared print helper ───────────────────────────────────────────────────────
+
+def _print_results(strategy, symbol, trades, wins, cash, equity_curve, hold_times, extra=""):
+    total   = cash - STARTING_CASH
+    wr      = (wins / len(trades) * 100) if trades else 0
+    avg_t   = sum(trades) / len(trades) if trades else 0
+    max_t   = min(trades) if trades else 0
+    max_dd  = max_drawdown(equity_curve) * 100
+    avg_hold = f"{sum(hold_times)/len(hold_times):.1f} min" if hold_times else "n/a"
+    days_pnl = []
+
+    print(f"\n{'='*56}")
+    print(f"  {strategy} — {symbol}")
+    print(f"{'='*56}")
+    print(f"  Trades:        {len(trades)}")
+    print(f"  Win rate:      {wr:.1f}%")
+    print(f"  Avg trade P&L: ${avg_t:+.4f}")
+    print(f"  Worst trade:   ${max_t:.2f}")
+    print(f"  Total return:  ${total:+.2f}  ({total/STARTING_CASH*100:.1f}%)")
+    print(f"  Final cash:    ${cash:.2f}")
+    print(f"  Max drawdown:  {max_dd:.1f}%")
+    print(f"  Avg hold time: {avg_hold}")
+    if extra:
+        print(extra)
+
+
+# ── Runner ────────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    SYMBOLS = ["TQQQ", "SPY", "GLD", "TLT"]
+
+    print("\n" + "="*56)
+    print("  Z-SCORE SCALPER  (365 days, 1-min, $400/symbol)")
+    print("="*56)
+    for sym in SYMBOLS:
+        print(f"\n{sym}:")
+        backtest(sym, days=365)
+
+    print("\n\n" + "="*56)
+    print("  TREND RIDER  (365 days, 1-min, $400/symbol)")
+    print("="*56)
+    for sym in SYMBOLS:
+        print(f"\n{sym}:")
+        backtest_trend_rider(sym, days=365)
+
+    print("\nDone.")

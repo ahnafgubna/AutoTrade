@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Contains hardcoded Alpaca API keys (client-side, no backend to hide them)
+dashboard.html
