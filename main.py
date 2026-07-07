@@ -17,7 +17,6 @@ SYMBOL_CONFIG = {
 }
 
 POSITION_PCT         = 0.80
-CAPITAL_PER_SYMBOL   = 400
 DAILY_LOSS_LIMIT_PCT = 0.03
 
 ET = timezone(timedelta(hours=-4))
@@ -43,6 +42,9 @@ def run():
     if day_pnl <= -(last_equity * DAILY_LOSS_LIMIT_PCT):
         print(f"Daily loss limit hit (${day_pnl:.2f}). No new trades today.")
         sys.exit(0)
+
+    # Use the full paper account, split evenly across all symbols
+    capital_per_symbol = equity / len(SYMBOL_CONFIG)
 
     for symbol, cfg in SYMBOL_CONFIG.items():
         print(f"\n── {symbol} ──")
@@ -83,7 +85,7 @@ def run():
 
         else:
             if should_enter(prices, z_entry=cfg["z_entry"]):
-                cash_to_use = CAPITAL_PER_SYMBOL * POSITION_PCT
+                cash_to_use = capital_per_symbol * POSITION_PCT
                 qty = round(cash_to_use / price, 6)  # fractional shares fix
 
                 if qty >= 0.001:
