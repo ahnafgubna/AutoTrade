@@ -13,6 +13,7 @@ LOOKBACK         = 20
 Z_SCORE_ENTRY    = -1.5
 STOP_CANDLES     = 2
 DAILY_LOSS_LIMIT = 0.03
+SLIPPAGE_PCT     = 0.0002  # 0.02% per side (0.04% round-trip) — conservative estimate for liquid ETFs
 
 SYMBOL_CONFIG = {
     "TQQQ": {"stop": 0.008, "target": 0.005, "strategy": "scalp"},
@@ -113,8 +114,9 @@ def backtest(symbol, days=365):
             tgt_price  = buy_price * (1 + tgt_pct)
 
             if price >= tgt_price:
-                cash += price * qty
-                pnl = (price - buy_price) * qty
+                sell_price = price * (1 - SLIPPAGE_PCT)
+                cash += sell_price * qty
+                pnl = (sell_price - buy_price) * qty
                 trades.append(pnl); daily_pnl[date] += pnl
                 wins += 1; target_exits += 1
                 holding = False; candles_below_stop = 0
@@ -124,8 +126,9 @@ def backtest(symbol, days=365):
             if price < stop_price:
                 candles_below_stop += 1
                 if candles_below_stop >= STOP_CANDLES:
-                    cash += price * qty
-                    pnl = (price - buy_price) * qty
+                    sell_price = price * (1 - SLIPPAGE_PCT)
+                    cash += sell_price * qty
+                    pnl = (sell_price - buy_price) * qty
                     trades.append(pnl); daily_pnl[date] += pnl
                     if pnl > 0: wins += 1
                     stop_exits += 1
@@ -139,21 +142,24 @@ def backtest(symbol, days=365):
             if len(closes[:i]) >= LOOKBACK + 1:
                 z = z_score(closes[:i], LOOKBACK)
                 if z <= Z_SCORE_ENTRY:
-                    qty = round((cash * 0.8) / price, 6)
+                    buy_price = price * (1 + SLIPPAGE_PCT)
+                    qty = round((cash * 0.8) / buy_price, 6)
                     if qty >= 0.001:
-                        holding = True; buy_price = price
-                        candles_below_stop = 0; cash -= price * qty
+                        holding = True
+                        candles_below_stop = 0; cash -= buy_price * qty
 
     if holding:
-        pnl = (closes[-1] - buy_price) * qty
-        cash += closes[-1] * qty
+        sell_price = closes[-1] * (1 - SLIPPAGE_PCT)
+        pnl = (sell_price - buy_price) * qty
+        cash += sell_price * qty
         trades.append(pnl)
         if pnl > 0: wins += 1
         equity_curve.append(cash)
 
+    slippage_cost = len(trades) * 2 * SLIPPAGE_PCT * STARTING_CASH
     _print_results("Z-SCORE SCALPER", symbol, trades, wins, cash,
                    equity_curve, hold_times=None,
-                   extra=f"  Target exits:  {target_exits}\n  Stop exits:    {stop_exits}\n  Halted days:   {len(halted_days)}")
+                   extra=f"  Target exits:  {target_exits}\n  Stop exits:    {stop_exits}\n  Halted days:   {len(halted_days)}\n  Slippage cost: ~${slippage_cost:.2f} ({SLIPPAGE_PCT*100:.2f}%/side)")
 
 
 # ── Trend Rider (Trailing Stop) ───────────────────────────────────────────────
@@ -274,7 +280,7 @@ if __name__ == "__main__":
     SYMBOLS = ["TQQQ", "SPY", "GLD", "TLT"]
 
     print("\n" + "="*56)
-    print("  Z-SCORE SCALPER  (365 days, 1-min, $400/symbol)")
+    print(f"  Z-SCORE SCALPER  (365 days, 1-min, $400/symbol, {SLIPPAGE_PCT*100:.2f}%/side slippage)")
     print("="*56)
     for sym in SYMBOLS:
         print(f"\n{sym}:")

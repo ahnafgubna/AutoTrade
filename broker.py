@@ -1,5 +1,6 @@
 import os
 import requests
+from datetime import datetime, timedelta, timezone
 
 API_KEY = os.environ["ALPACA_API_KEY"]
 API_SECRET = os.environ["ALPACA_API_SECRET"]
@@ -19,8 +20,12 @@ def get_account():
 
 
 def get_bars(symbol, limit=50):
+    # Without an explicit `start`, Alpaca anchors to the earliest available
+    # bars instead of the most recent ones — the bot was reading data frozen
+    # near market open all day. Anchor the window to "now" instead.
+    start = (datetime.now(timezone.utc) - timedelta(minutes=limit + 15)).isoformat()
     r = requests.get(f"{DATA_URL}/stocks/bars", headers=HEADERS, params={
-        "symbols": symbol, "timeframe": "1Min", "limit": limit, "feed": "iex"
+        "symbols": symbol, "timeframe": "1Min", "limit": limit, "feed": "iex", "start": start
     })
     r.raise_for_status()
     return [b["c"] for b in r.json().get("bars", {}).get(symbol, [])]
