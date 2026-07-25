@@ -63,10 +63,15 @@ def place_order(symbol, qty, side):
 
 def place_bracket_order(symbol, qty, take_profit_price, stop_price):
     # Whole shares only — Alpaca doesn't support brackets on fractional qty.
-    # gtc so the exit legs survive overnight if the position is held past close.
+    # time_in_force="day": unfilled exit legs expire at market close instead of
+    # riding into the next session. A stop that survives overnight fills at
+    # whatever price is available after a gap, not the stop price — on a 3x
+    # leveraged ETF that gap can be several times the intended max loss.
+    # Positions are force-flattened before close (see main.py) as the actual
+    # guard against overnight risk; "day" here just stops stale legs lingering.
     r = requests.post(f"{BASE_URL}/orders", headers=HEADERS, json={
         "symbol": symbol, "qty": qty, "side": "buy",
-        "type": "market", "time_in_force": "gtc",
+        "type": "market", "time_in_force": "day",
         "order_class": "bracket",
         "take_profit": {"limit_price": take_profit_price},
         "stop_loss": {"stop_price": stop_price},

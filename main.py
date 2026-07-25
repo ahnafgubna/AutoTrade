@@ -24,8 +24,9 @@ POSITION_PCT         = 0.80
 DAILY_LOSS_LIMIT_PCT = 0.03
 
 ET = timezone(timedelta(hours=-4))
-MARKET_OPEN  = 9 * 60 + 30
-MARKET_CLOSE = 16 * 60
+MARKET_OPEN     = 9 * 60 + 30
+MARKET_CLOSE    = 16 * 60
+EOD_FLATTEN_AT  = 15 * 60 + 55  # 3:55pm ET — close everything before the bell
 
 
 def run():
@@ -45,6 +46,18 @@ def run():
 
     if day_pnl <= -(last_equity * DAILY_LOSS_LIMIT_PCT):
         print(f"Daily loss limit hit (${day_pnl:.2f}). No new trades today.")
+        sys.exit(0)
+
+    if minutes >= EOD_FLATTEN_AT:
+        # This strategy is a same-day scalp — holding a leveraged position
+        # (TQQQ) overnight exposes it to gap risk far beyond its stop width.
+        # Flatten everything before the close instead of letting a stop ride
+        # into the next session.
+        print(f"Near close ({now_et.strftime('%I:%M %p')} ET) — flattening all positions.")
+        for symbol in SYMBOL_CONFIG:
+            if get_position(symbol):
+                close_position(symbol)
+                print(f"  Flattened {symbol}")
         sys.exit(0)
 
     # Use the full paper account, split evenly across all symbols
