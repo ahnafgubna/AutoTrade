@@ -1,0 +1,30 @@
+name: AutoTrader Swing
+
+on:
+  schedule:
+    # Once daily, 3:55pm ET (19:55 UTC), weekdays -- near close so the
+    # day's bar is nearly final, matching the backtest's use of daily closes.
+    - cron: "55 19 * * 1-5"
+  workflow_dispatch:  # allows manual trigger from GitHub UI for testing
+
+jobs:
+  trade:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run swing trading bot
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_SWING_API_KEY }}
+          ALPACA_API_SECRET: ${{ secrets.ALPACA_SWING_API_SECRET }}
+        run: python swing_main.py
