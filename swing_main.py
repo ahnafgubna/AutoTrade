@@ -17,7 +17,7 @@ from datetime import datetime, timezone, timedelta
 from broker import (get_account, get_daily_bars, get_position, get_last_fill,
                      place_bracket_order, close_position)
 from swing_strategy import (SYMBOLS, LOOKBACK_DAYS, ATR_PERIOD, MAX_HOLD_DAYS,
-                             POSITION_PCT, should_enter, atr, stop_target_prices)
+                             should_enter, atr, stop_target_prices, position_size)
 
 ET = timezone(timedelta(hours=-4))
 MARKET_OPEN  = 9 * 60 + 30
@@ -80,15 +80,16 @@ def run():
         else:
             if should_enter(closes):
                 atr_value = atr(highs, lows, closes, ATR_PERIOD)
-                cash_to_use = capital_per_symbol * POSITION_PCT
-                qty = int(cash_to_use / price)
-
-                if qty >= 1 and atr_value:
+                if atr_value:
                     stop_pr, target_pr = stop_target_prices(price, atr_value)
-                    place_bracket_order(symbol, qty, target_pr, stop_pr, time_in_force="gtc")
-                    print(f"  BUY {qty} @ ~${price:.2f} | TP ${target_pr:.2f} / SL ${stop_pr:.2f} | Total: ~${qty * price:.2f}")
-                else:
-                    print(f"  Signal triggered but allocation too small for 1 share.")
+                    qty = position_size(capital_per_symbol, price, stop_pr)
+
+                    if qty >= 1:
+                        place_bracket_order(symbol, qty, target_pr, stop_pr, time_in_force="gtc")
+                        risk_dollars = qty * (price - stop_pr)
+                        print(f"  BUY {qty} @ ~${price:.2f} | TP ${target_pr:.2f} / SL ${stop_pr:.2f} | Risking ~${risk_dollars:.2f} | Total: ~${qty * price:.2f}")
+                    else:
+                        print(f"  Signal triggered but allocation too small for 1 share.")
             else:
                 print(f"  No entry signal @ ${price:.2f}")
 

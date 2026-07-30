@@ -11,7 +11,12 @@ ATR_PERIOD      = 14
 STOP_ATR_MULT   = 2.0
 TARGET_ATR_MULT = 2.67
 MAX_HOLD_DAYS   = 10
-POSITION_PCT    = 0.90
+
+# Position size is derived from the stop distance so a stop-hit always
+# costs about the same % of the account, instead of every trade committing
+# a flat share of capital regardless of how wide the ATR stop is.
+RISK_PCT         = 0.02
+MAX_POSITION_PCT = 0.90  # cash ceiling -- no margin available
 
 
 def z_score(prices, lookback):
@@ -46,3 +51,12 @@ def stop_target_prices(entry_price, atr_value):
     stop_price   = entry_price - atr_value * STOP_ATR_MULT
     target_price = entry_price + atr_value * TARGET_ATR_MULT
     return round(stop_price, 2), round(target_price, 2)
+
+
+def position_size(cash, entry_price, stop_price):
+    stop_distance = entry_price - stop_price
+    if stop_distance <= 0:
+        return 0
+    risk_qty = (cash * RISK_PCT) / stop_distance
+    max_qty  = (cash * MAX_POSITION_PCT) / entry_price
+    return int(min(risk_qty, max_qty))  # whole shares -- brackets don't support fractional
