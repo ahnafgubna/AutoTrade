@@ -5,8 +5,9 @@ State is read from Alpaca each run (stateless design).
 """
 import os
 import sys
-from datetime import datetime, timezone, timedelta
-from broker import (get_account, get_bars, get_position, get_open_orders,
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from broker import (get_account, get_bars, get_position, get_positions, get_open_orders,
                     place_bracket_order, close_position)
 from strategy import should_enter, LOOKBACK
 
@@ -16,17 +17,16 @@ from strategy import should_enter, LOOKBACK
 SYMBOL_CONFIG = {
     "TQQQ": {"z_entry": -1.5, "take_profit": 0.005, "stop_loss": 0.010},
     "SPY":  {"z_entry": -1.5, "take_profit": 0.004, "stop_loss": 0.0075},
-    "TLT":  {"z_entry": -1.2, "take_profit": 0.003, "stop_loss": 0.006},
     "GLD":  {"z_entry": -1.2, "take_profit": 0.003, "stop_loss": 0.006},
 }
 
 POSITION_PCT         = 0.80
 DAILY_LOSS_LIMIT_PCT = 0.03
 
-ET = timezone(timedelta(hours=-4))
+ET = ZoneInfo("America/New_York")  # handles EDT/EST switch automatically
 MARKET_OPEN     = 9 * 60 + 30
 MARKET_CLOSE    = 16 * 60
-EOD_FLATTEN_AT  = 15 * 60 + 55  # 3:55pm ET — close everything before the bell
+EOD_FLATTEN_AT  = 15 * 60 + 45  # 3:45pm ET — leaves ~3 runs to flatten if one fails
 
 
 def run():
@@ -53,11 +53,12 @@ def run():
         # (TQQQ) overnight exposes it to gap risk far beyond its stop width.
         # Flatten everything before the close instead of letting a stop ride
         # into the next session.
+        # Every open position, not just SYMBOL_CONFIG, so a symbol removed
+        # from the config can't be left stranded overnight.
         print(f"Near close ({now_et.strftime('%I:%M %p')} ET) — flattening all positions.")
-        for symbol in SYMBOL_CONFIG:
-            if get_position(symbol):
-                close_position(symbol)
-                print(f"  Flattened {symbol}")
+        for p in get_positions():
+            close_position(p["symbol"])
+            print(f"  Flattened {p['symbol']}")
         sys.exit(0)
 
     # Use the full paper account, split evenly across all symbols

@@ -1,11 +1,10 @@
-name: AutoTrader Swing
+﻿name: AutoTrader Swing
 
 on:
-  schedule:
-    # Once daily, 3:55pm ET (19:55 UTC), weekdays -- near close so the
-    # day's bar is nearly final, matching the backtest's use of daily closes.
-    - cron: "55 19 * * 1-5"
-  workflow_dispatch:  # allows manual trigger from GitHub UI for testing
+  # Triggered by cron-job.org at 3:45pm ET on weekdays. GitHub's own
+  # `schedule` trigger fired ~2 hours late (after the close), so the bot
+  # exited "outside market hours" every day and never traded.
+  workflow_dispatch:
 
 jobs:
   trade:
@@ -21,7 +20,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install requests
+        run: pip install requests tzdata
 
       - name: Run swing trading bot
         env:

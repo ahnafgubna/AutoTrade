@@ -13,13 +13,14 @@ trading bot, holding through overnight/weekend gaps is the point here,
 not a bug to guard against.
 """
 import sys
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from broker import (get_account, get_daily_bars, get_position, get_last_fill,
                      place_bracket_order, close_position)
 from swing_strategy import (SYMBOLS, LOOKBACK_DAYS, ATR_PERIOD, MAX_HOLD_DAYS,
                              should_enter, atr, stop_target_prices, position_size)
 
-ET = timezone(timedelta(hours=-4))
+ET = ZoneInfo("America/New_York")  # handles EDT/EST switch automatically
 MARKET_OPEN  = 9 * 60 + 30
 MARKET_CLOSE = 16 * 60
 

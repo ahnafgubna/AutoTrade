@@ -1,4 +1,4 @@
-name: AutoTrader
+﻿name: AutoTrader
 
 on:
   schedule:
@@ -26,7 +26,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install requests
+        run: pip install requests tzdata
 
       - name: Run trading bot
         env:

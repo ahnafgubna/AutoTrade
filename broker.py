@@ -131,7 +131,17 @@ def place_bracket_order(symbol, qty, take_profit_price, stop_price, time_in_forc
     return r.json()
 
 
+def get_positions():
+    r = _request("GET", f"{BASE_URL}/positions", headers=HEADERS)
+    r.raise_for_status()
+    return r.json()
+
+
 def close_position(symbol):
+    # Bracket exit legs reserve the position's shares, so Alpaca rejects a
+    # close while they're open. Cancel them first.
+    for o in get_open_orders(symbol):
+        _request("DELETE", f"{BASE_URL}/orders/{o['id']}", headers=HEADERS)
     r = _request("DELETE", f"{BASE_URL}/positions/{symbol}", headers=HEADERS)
     if r.status_code == 404:
         return None
